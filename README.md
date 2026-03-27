@@ -27,13 +27,41 @@ All agents within a round run concurrently via `asyncio.gather`.
 
 ## Setup
 
+```bash
+pip install -r requirements.txt
 ```
-pip install rich textual
+
+For the web interface, also install the frontend dependencies:
+
+```bash
+cd web && npm install
 ```
 
 Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` CLI) installed and authenticated.
 
 ## Usage
+
+### Web interface
+
+The recommended way to use Agent Colosseum. Run the backend and frontend in two terminals:
+
+```bash
+# Terminal 1 — API server
+uvicorn server:app --reload --port 8000
+
+# Terminal 2 — Svelte frontend
+cd web && npm run dev
+```
+
+Open `http://localhost:5173`. The web UI features:
+
+- Dark theme with color-coded agents
+- Mode selector (debate / plan / tech)
+- Round selector (3, 5, or unlimited)
+- Real-time streaming — rounds appear as they complete via SSE
+- Follow-up questions after the verdict
+- Transcript browser sidebar
+- Responsive mobile layout
 
 ### CLI mode
 
@@ -81,6 +109,18 @@ question              The question to debate
 
 Every debate auto-saves to a `transcripts/` folder as both `.md` and `.json` files, named with a timestamp and question slug (e.g. `20260326-143022_swiftdata-or-coredata.md`). Use `--no-save` to disable this, or `--output` to additionally write to a specific path.
 
+## Architecture
+
+```
+colosseum.py       — Core debate engine (async, calls claude -p subprocesses)
+modes.py           — Mode configs (agents, prompts, round styles)
+server.py          — FastAPI backend with SSE streaming
+web/               — SvelteKit frontend
+colosseum_tui.py   — Terminal UI (Textual)
+```
+
+The web interface uses Server-Sent Events to stream debate progress in real time. The FastAPI server wraps the same `colosseum.py` engine used by the CLI and TUI, so all three interfaces produce identical results.
+
 ## Output
 
-Terminal output uses Rich formatting — color-coded agents, round headers, spinners while waiting, and the Judge's verdict in a panel box. The TUI uses Textual for a full interactive experience with live-updating debate log and transcript browser.
+Terminal output uses Rich formatting — color-coded agents, round headers, spinners while waiting, and the Judge's verdict in a panel box. The TUI uses Textual for a full interactive experience with live-updating debate log and transcript browser. The web interface uses a dark-themed Svelte UI with live SSE streaming.

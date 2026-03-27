@@ -253,12 +253,18 @@ MODE_ICONS = {
     "debate": "🏛️",
     "plan": "🧠",
     "tech": "🔬",
+    "startup": "🚀",
+    "ethics": "⚖️",
+    "red-team": "🔴",
 }
 
 MODE_VERDICT_TITLES = {
     "debate": "⚖️  JUDGE'S VERDICT",
     "plan": "📋  THE PLAN",
     "tech": "✅  TECHNICAL REVIEW",
+    "startup": "🚀  INVESTMENT VERDICT",
+    "ethics": "🏛️  ETHICAL VERDICT",
+    "red-team": "🔴  RED TEAM REPORT",
 }
 
 

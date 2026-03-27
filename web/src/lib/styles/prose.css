@@ -1,0 +1,161 @@
+/* Prose styles for markdown-rendered content */
+.prose :global(p) {
+	margin: 0 0 0.6em;
+}
+.prose :global(p:last-child) {
+	margin-bottom: 0;
+}
+.prose :global(strong) {
+	font-weight: 600;
+	color: var(--text);
+}
+.prose :global(em) {
+	font-style: italic;
+}
+.prose :global(h1),
+.prose :global(h2),
+.prose :global(h3),
+.prose :global(h4) {
+	font-weight: 600;
+	color: var(--text);
+	margin: 0.8em 0 0.4em;
+	line-height: 1.3;
+}
+.prose :global(h1) { font-size: 1.2em; }
+.prose :global(h2) { font-size: 1.1em; }
+.prose :global(h3) { font-size: 1.05em; }
+.prose :global(h4) { font-size: 1em; }
+.prose :global(ul),
+.prose :global(ol) {
+	margin: 0.4em 0 0.6em;
+	padding-left: 1.5em;
+}
+.prose :global(li) {
+	margin: 0.2em 0;
+}
+.prose :global(li > ul),
+.prose :global(li > ol) {
+	margin: 0.1em 0;
+}
+.prose :global(blockquote) {
+	border-left: 3px solid var(--border-accent);
+	padding: 0.3em 0 0.3em 1em;
+	margin: 0.5em 0;
+	color: var(--text-dim);
+}
+.prose :global(a) {
+	color: var(--accent);
+	text-decoration: none;
+}
+.prose :global(a:hover) {
+	text-decoration: underline;
+}
+.prose :global(hr) {
+	border: none;
+	border-top: 1px solid var(--border);
+	margin: 0.8em 0;
+}
+.prose :global(table) {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 0.6em 0;
+	font-size: 0.9em;
+}
+.prose :global(th),
+.prose :global(td) {
+	border: 1px solid var(--border);
+	padding: 6px 10px;
+	text-align: left;
+}
+.prose :global(th) {
+	background: var(--bg-elevated);
+	font-weight: 600;
+}
+
+/* Inline code */
+.prose :global(code) {
+	font-family: var(--font-mono);
+	font-size: 0.88em;
+	background: var(--bg-elevated);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 0.15em 0.4em;
+}
+
+/* Code blocks */
+.prose :global(.code-block) {
+	margin: 0.6em 0;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	overflow: hidden;
+	background: var(--bg);
+}
+.prose :global(.code-header) {
+	font-family: var(--font-mono);
+	font-size: 11px;
+	color: var(--text-muted);
+	padding: 4px 12px;
+	background: var(--bg-surface);
+	border-bottom: 1px solid var(--border);
+	min-height: 4px;
+}
+.prose :global(.code-header:empty) {
+	padding: 0;
+	border-bottom: none;
+	min-height: 0;
+}
+.prose :global(.code-block pre) {
+	margin: 0;
+	padding: 12px 14px;
+	overflow-x: auto;
+}
+.prose :global(.code-block code) {
+	font-family: var(--font-mono);
+	font-size: 13px;
+	line-height: 1.55;
+	background: none;
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+
+/* highlight.js token colors */
+.prose :global(.hljs-keyword),
+.prose :global(.hljs-selector-tag),
+.prose :global(.hljs-built_in) {
+	color: var(--magenta);
+}
+.prose :global(.hljs-string),
+.prose :global(.hljs-attr) {
+	color: var(--green);
+}
+.prose :global(.hljs-number),
+.prose :global(.hljs-literal) {
+	color: var(--orange);
+}
+.prose :global(.hljs-comment),
+.prose :global(.hljs-doctag) {
+	color: var(--text-muted);
+	font-style: italic;
+}
+.prose :global(.hljs-type),
+.prose :global(.hljs-class .hljs-title),
+.prose :global(.hljs-title) {
+	color: var(--yellow);
+}
+.prose :global(.hljs-function) {
+	color: var(--blue);
+}
+.prose :global(.hljs-variable),
+.prose :global(.hljs-template-variable) {
+	color: var(--cyan);
+}
+.prose :global(.hljs-params) {
+	color: var(--text);
+}
+.prose :global(.hljs-meta) {
+	color: var(--text-dim);
+}
+.prose :global(.hljs-punctuation) {
+	color: var(--text-dim);
+}

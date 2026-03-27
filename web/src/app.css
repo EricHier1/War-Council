@@ -1,4 +1,12 @@
 :root {
+	--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+	--radius: 12px;
+	--radius-sm: 8px;
+}
+
+:root,
+[data-theme="dark"] {
 	--bg: #0a0a0f;
 	--bg-surface: #12121a;
 	--bg-elevated: #1a1a26;
@@ -17,10 +25,27 @@
 	--cyan: #6aefd8;
 	--magenta: #d06aef;
 	--orange: #ef9a6a;
-	--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-	--radius: 12px;
-	--radius-sm: 8px;
+}
+
+[data-theme="light"] {
+	--bg: #f5f5f7;
+	--bg-surface: #ffffff;
+	--bg-elevated: #eeeef0;
+	--bg-hover: #e5e5ea;
+	--border: #d1d1d6;
+	--border-accent: #b0b0be;
+	--text: #1c1c1e;
+	--text-dim: #636366;
+	--text-muted: #8e8e93;
+	--accent: #5b4dc7;
+	--accent-glow: #5b4dc733;
+	--red: #c33;
+	--yellow: #996b00;
+	--green: #1a7a42;
+	--blue: #2060b0;
+	--cyan: #0e7a66;
+	--magenta: #8a2eb5;
+	--orange: #b05a20;
 }
 
 * {

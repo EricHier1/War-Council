@@ -70,6 +70,12 @@
 		selectedTranscript = null;
 	}
 
+	function newDebate() {
+		reset();
+		question = '';
+		status = 'idle';
+	}
+
 	// ── Stop ───────────────────────────────────────────────────
 	function stopDebate() {
 		if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
@@ -188,7 +194,9 @@
 	/>
 
 	<main class="main">
-		<ThemeToggle />
+		<div class="top-bar">
+			<ThemeToggle />
+		</div>
 
 		{#if selectedTranscript}
 			<TranscriptViewer transcript={selectedTranscript} onClose={() => (selectedTranscript = null)} />
@@ -203,6 +211,7 @@
 				{hasDebate}
 				onLaunch={launchDebate}
 				onStop={stopDebate}
+				onNewDebate={newDebate}
 			/>
 
 			<StatusBar
@@ -259,6 +268,11 @@
 		margin: 0 auto;
 		width: 100%;
 		position: relative;
+	}
+	.top-bar {
+		display: flex;
+		justify-content: flex-end;
+		flex-shrink: 0;
 	}
 	.debate-log {
 		flex: 1;

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { renderMarkdown } from '$lib/markdown';
+	import '$lib/styles/prose.css';
+
 	let {
 		transcript,
 		onClose,
@@ -13,8 +16,8 @@
 		<h2>{transcript.filename}</h2>
 		<button class="btn-secondary btn-sm" onclick={onClose}>Close</button>
 	</div>
-	<div class="transcript-content">
-		<pre>{transcript.content}</pre>
+	<div class="transcript-content prose">
+		{@html renderMarkdown(transcript.content)}
 	</div>
 </div>
 
@@ -31,6 +34,7 @@
 		justify-content: space-between;
 		padding-bottom: 12px;
 		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
 	}
 	.transcript-viewer-header h2 {
 		font-size: 13px;
@@ -45,14 +49,8 @@
 		flex: 1;
 		overflow-y: auto;
 		padding-top: 16px;
-	}
-	.transcript-content pre {
-		font-family: var(--font-mono);
-		font-size: 12px;
+		font-size: 14px;
 		line-height: 1.7;
-		white-space: pre-wrap;
-		word-wrap: break-word;
-		color: var(--text);
 	}
 	.btn-secondary {
 		padding: 10px 18px;

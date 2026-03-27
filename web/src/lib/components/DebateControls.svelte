@@ -12,6 +12,7 @@
 		hasDebate,
 		onLaunch,
 		onStop,
+		onNewDebate,
 	}: {
 		question: string;
 		selectedMode: string;
@@ -22,6 +23,7 @@
 		hasDebate: boolean;
 		onLaunch: () => void;
 		onStop: () => void;
+		onNewDebate: () => void;
 	} = $props();
 
 	let modeList = $derived(Object.entries(modes));
@@ -50,6 +52,9 @@
 				Stop
 			</button>
 		{:else}
+			{#if hasDebate}
+				<button class="new-btn" onclick={onNewDebate}>New</button>
+			{/if}
 			<button class="launch-btn" onclick={onLaunch} disabled={!question.trim()}>
 				Launch
 			</button>
@@ -59,14 +64,13 @@
 	<div class="options-row">
 		<div class="option-group">
 			<span class="option-label">Mode</span>
-			<div class="segmented-control">
+			<div class="mode-grid">
 				{#each modeList as [key, info]}
 					<button
-						class="seg-btn"
+						class="mode-btn"
 						class:active={selectedMode === key}
 						onclick={() => (selectedMode = key)}
 						disabled={isRunning}
-						title={info.description}
 					>
 						{key}
 					</button>
@@ -96,8 +100,11 @@
 				</button>
 			</div>
 		</div>
+	</div>
 
-		{#if currentModeInfo && !hasDebate && !isRunning}
+	{#if currentModeInfo && !hasDebate && !isRunning}
+		<div class="mode-detail">
+			<p class="mode-description">{currentModeInfo.description}</p>
 			<div class="agents-preview">
 				{#each Object.entries(currentModeInfo.agents) as [name, agent]}
 					<span class="agent-tag" style="--agent-color: {agentColor(agent.color)}">
@@ -105,8 +112,8 @@
 					</span>
 				{/each}
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -169,6 +176,23 @@
 	}
 	.launch-btn:hover:not(:disabled) { filter: brightness(1.1); }
 	.launch-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+	.new-btn {
+		padding: 11px 18px;
+		background: var(--bg-elevated);
+		color: var(--text-dim);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		font-size: 14px;
+		font-weight: 500;
+		font-family: var(--font-sans);
+		cursor: pointer;
+		transition: all 0.15s;
+		white-space: nowrap;
+	}
+	.new-btn:hover {
+		color: var(--text);
+		border-color: var(--border-accent);
+	}
 	.stop-btn {
 		padding: 11px 20px;
 		background: transparent;
@@ -189,12 +213,12 @@
 	.options-row {
 		display: flex;
 		gap: 20px;
-		align-items: center;
+		align-items: flex-start;
 		flex-wrap: wrap;
 	}
 	.option-group {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 8px;
 	}
 	.option-label {
@@ -203,7 +227,40 @@
 		color: var(--text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
+		padding-top: 6px;
 	}
+
+	/* Mode grid — wraps naturally with 6 modes */
+	.mode-grid {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
+	}
+	.mode-btn {
+		padding: 5px 12px;
+		background: var(--bg-surface);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--text-dim);
+		font-size: 12px;
+		font-weight: 500;
+		font-family: var(--font-sans);
+		cursor: pointer;
+		transition: all 0.15s;
+		text-transform: capitalize;
+	}
+	.mode-btn:hover:not(:disabled):not(.active) {
+		background: var(--bg-hover);
+		color: var(--text);
+		border-color: var(--border-accent);
+	}
+	.mode-btn.active {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: white;
+	}
+	.mode-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 	.segmented-control {
 		display: flex;
 		background: var(--bg-surface);
@@ -231,11 +288,22 @@
 	}
 	.seg-btn.active { background: var(--accent); color: white; }
 	.seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+	/* Mode detail: description + agents */
+	.mode-detail {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.mode-description {
+		font-size: 12px;
+		color: var(--text-dim);
+		line-height: 1.5;
+	}
 	.agents-preview {
 		display: flex;
 		gap: 6px;
 		flex-wrap: wrap;
-		margin-left: auto;
 	}
 	.agent-tag {
 		font-size: 11px;
@@ -253,7 +321,6 @@
 			align-items: flex-start;
 			gap: 10px;
 		}
-		.agents-preview { margin-left: 0; }
 		.input-row { flex-direction: column; }
 	}
 </style>

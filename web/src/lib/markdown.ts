@@ -1,4 +1,5 @@
 import { Marked } from 'marked';
+import DOMPurify from 'isomorphic-dompurify';
 import hljs from 'highlight.js/lib/core';
 
 // Register only common languages to keep bundle small
@@ -53,5 +54,8 @@ const marked = new Marked({
 });
 
 export function renderMarkdown(text: string): string {
-	return marked.parse(text) as string;
+	// marked passes raw HTML through, so sanitize before it reaches {@html}.
+	// Agent output (esp. red-team mode) and on-disk transcripts are untrusted.
+	const html = marked.parse(text, { async: false });
+	return DOMPurify.sanitize(html);
 }

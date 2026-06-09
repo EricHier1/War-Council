@@ -29,3 +29,6 @@ Thumbs.db
 # Transcripts (generated)
 transcripts/
 transcript.md
+
+# Sessions (generated at runtime — contains debate questions/history)
+.sessions/

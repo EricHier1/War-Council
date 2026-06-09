@@ -14,24 +14,54 @@
 		onRefresh: () => void;
 		onSelect: (filename: string) => void;
 	} = $props();
+
+	// Filenames are `{stamp}_{mode}_{slug}` \u2014 split into a mode badge + question.
+	function parseStem(stem: string): { mode: string; name: string } {
+		const parts = stem.split('_');
+		return {
+			mode: parts[1] ?? '',
+			name: parts.slice(2).join(' ').replaceAll('-', ' '),
+		};
+	}
+
+	function formatDate(iso: string): string {
+		const d = new Date(iso);
+		if (isNaN(d.getTime())) return '';
+		const now = new Date();
+		const yesterday = new Date(now);
+		yesterday.setDate(now.getDate() - 1);
+		const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+		if (d.toDateString() === now.toDateString()) return `Today \u00b7 ${time}`;
+		if (d.toDateString() === yesterday.toDateString()) return `Yesterday \u00b7 ${time}`;
+		return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+	}
 </script>
 
-<button class="sidebar-toggle" onclick={onToggle}>
+<button
+	class="sidebar-toggle"
+	onclick={onToggle}
+	aria-label={open ? 'Close history' : 'Open history'}
+	aria-expanded={open}
+>
 	{open ? '\u2715' : '\u2630'}
 </button>
 
 <aside class="sidebar" class:open>
 	<div class="sidebar-header">
 		<h2>History</h2>
-		<button class="icon-btn" onclick={onRefresh} title="Refresh">
-			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+		<button class="icon-btn" onclick={onRefresh} title="Refresh" aria-label="Refresh history">
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
 		</button>
 	</div>
 	<div class="transcript-list">
 		{#each transcripts as t}
+			{@const parsed = parseStem(t.stem)}
 			<button class="transcript-item" onclick={() => onSelect(t.filename)}>
-				<span class="transcript-name">{t.stem.split('_').slice(1).join(' ').replaceAll('-', ' ')}</span>
-				<span class="transcript-date">{t.stem.split('_')[0]}</span>
+				<div class="transcript-top">
+					{#if parsed.mode}<span class="transcript-mode">{parsed.mode}</span>{/if}
+					<span class="transcript-date">{formatDate(t.modified)}</span>
+				</div>
+				<span class="transcript-name">{parsed.name}</span>
 			</button>
 		{:else}
 			<p class="empty-msg">No sessions yet</p>
@@ -83,7 +113,7 @@
 	.transcript-item {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
+		gap: 4px;
 		width: 100%;
 		padding: 8px 10px;
 		background: none;
@@ -95,6 +125,22 @@
 		transition: background 0.15s;
 	}
 	.transcript-item:hover { background: var(--bg-hover); }
+	.transcript-top {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.transcript-mode {
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--accent);
+		background: var(--accent-glow);
+		padding: 1px 6px;
+		border-radius: 4px;
+		font-family: var(--font-mono);
+	}
 	.transcript-name {
 		font-size: 13px;
 		font-weight: 500;

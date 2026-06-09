@@ -23,6 +23,7 @@ import json
 import random
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -69,23 +70,102 @@ class ClaudeError(Exception):
     pass
 
 
-async def call_claude(prompt: str, system_prompt: str) -> str:
-    """Run a single claude -p subprocess and return its stdout."""
-    proc = await asyncio.create_subprocess_exec(
+@dataclass
+class ClaudeResult:
+    """Parsed output of a single `claude -p --output-format json` call."""
+    text: str
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    structured: dict | None = None
+    model: str | None = None
+
+
+# Per-subprocess timeout (seconds). A single claude -p call that exceeds this
+# is killed so one hung agent can't stall an entire round. Repo-grounded calls
+# can take longer (the agent reads files), so they get a larger budget.
+CLAUDE_TIMEOUT = 180
+CLAUDE_TIMEOUT_REPO = 300
+
+# Read-only tools granted to agents when a debate is grounded in a repo.
+REPO_TOOLS = ["Read", "Grep", "Glob"]
+
+
+async def call_claude(
+    prompt: str,
+    system_prompt: str,
+    model: str | None = None,
+    json_schema: dict | None = None,
+    repo: str | None = None,
+) -> ClaudeResult:
+    """Run a single claude -p subprocess and return its parsed result.
+
+    Uses --output-format json so we get usage/cost metrics alongside the text.
+    When `repo` is set, the subprocess runs in that directory with read-only
+    tools (Read/Grep/Glob) so the agent can inspect the codebase.
+    The subprocess is killed if it exceeds the timeout or if the caller is
+    cancelled (e.g. the web client disconnects), so we never leak processes.
+    """
+    args = [
         "claude", "-p", prompt,
         "--system-prompt", system_prompt,
+        "--output-format", "json",
+    ]
+    if model:
+        args += ["--model", model]
+    if json_schema:
+        args += ["--json-schema", json.dumps(json_schema)]
+    if repo:
+        args += ["--allowedTools", *REPO_TOOLS]
+
+    timeout = CLAUDE_TIMEOUT_REPO if repo else CLAUDE_TIMEOUT
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        cwd=repo or None,
     )
-    stdout, stderr = await proc.communicate()
-    output = stdout.decode().strip()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ClaudeError(f"claude timed out after {timeout}s")
+    except asyncio.CancelledError:
+        # Client disconnected or round aborted — don't leave the child running.
+        proc.kill()
+        await proc.wait()
+        raise
+
+    out = stdout.decode().strip()
     err = stderr.decode().strip()
 
     if proc.returncode != 0:
         raise ClaudeError(err or f"claude exited with code {proc.returncode}")
-    if not output and err:
-        raise ClaudeError(err)
-    return output
+    if not out:
+        raise ClaudeError(err or "claude returned no output")
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        raise ClaudeError("Could not parse claude JSON output")
+
+    if data.get("is_error"):
+        raise ClaudeError(data.get("result") or "claude reported an error")
+
+    usage = data.get("usage") or {}
+    return ClaudeResult(
+        text=(data.get("result") or "").strip(),
+        cost_usd=float(data.get("total_cost_usd") or 0.0),
+        duration_ms=int(data.get("duration_ms") or 0),
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        structured=data.get("structured_output"),
+    )
 
 
 # ── Round runners ────────────────────────────────────────────────────────────
@@ -121,10 +201,12 @@ def _get_middle_prompt(question: str, history: list[dict[str, str]]) -> str:
     )
 
 
-def _get_last_prompt(question: str, history: list[dict[str, str]]) -> str:
+def _get_last_prompt(
+    question: str, history: list[dict[str, str]], mode: dict | None = None
+) -> str:
     """Build the final-round prompt based on mode strategy."""
     block = build_history_block(history)
-    mode = _active_mode
+    mode = mode if mode is not None else _active_mode
     strategy = mode.get("round_strategy", "debate")
 
     if strategy == "debate":
@@ -143,66 +225,133 @@ def _get_last_prompt(question: str, history: list[dict[str, str]]) -> str:
     )
 
 
-async def run_round_independent(question: str) -> dict[str, str]:
-    """Round 1: each agent answers independently."""
-    async def ask(name, cfg):
-        return (name, await call_claude(question, cfg["system_prompt"]))
+# Prepended to agent/judge prompts when a debate is grounded in a repo.
+REPO_PREAMBLE = (
+    "You have READ-ONLY access to a code repository in your current working "
+    "directory. Use your Read, Grep, and Glob tools to inspect the actual files "
+    "before forming your argument, and ground your points in specific code you "
+    "find (cite file paths). Do not speculate about the code without checking.\n\n"
+)
 
-    results = await asyncio.gather(*[ask(n, c) for n, c in _active_agents.items()])
-    return dict(results)
 
-
-async def run_round_middle(
-    question: str, history: list[dict[str, str]]
-) -> dict[str, str]:
-    """Middle rounds: behavior depends on mode strategy."""
+def _build_agent_prompt(
+    name: str,
+    question: str,
+    history: list[dict[str, str]],
+    kind: str,
+    followup: str | None = None,
+    verdict: str | None = None,
+    repo: str | None = None,
+    mode: dict | None = None,
+) -> str:
+    """Build the prompt for one agent for a given round kind."""
     block = build_history_block(history)
-    strategy = _active_mode.get("round_strategy", "debate")
+    m = mode if mode is not None else _active_mode
+    agents = m["agents"]
+    strategy = m.get("round_strategy", "debate")
 
-    if strategy == "debate":
-        # Attack mode: each agent targets another
-        agent_names = list(_active_agents.keys())
-
-        async def attack(name, cfg):
-            targets = [n for n in agent_names if n != name]
-            target = random.choice(targets)
-            prompt = (
+    if kind == "independent":
+        base = question
+    elif kind == "middle":
+        if strategy == "debate":
+            targets = [n for n in agents if n != name]
+            target = random.choice(targets) if targets else name
+            base = (
                 f"Original question: {question}\n\n"
                 f"{block}\n"
                 f"Now attack the weakest argument. Specifically target {target}'s position. "
                 f"Explain why their reasoning is flawed. 3-5 sentences max."
             )
-            return (name, await call_claude(prompt, cfg["system_prompt"]))
-
-        results = await asyncio.gather(*[attack(n, c) for n, c in _active_agents.items()])
-    else:
-        # Iterative/converge: use mode's custom middle prompt
-        custom = _active_mode.get("round_prompts", {}).get("middle", "")
-        prompt = (
+        else:
+            custom = m.get("round_prompts", {}).get("middle", "")
+            base = f"Original question: {question}\n\n{block}\n{custom}"
+    elif kind == "commit":
+        base = _get_last_prompt(question, history, m)
+    elif kind == "followup":
+        base = (
             f"Original question: {question}\n\n"
             f"{block}\n"
-            f"{custom}"
+            f"== Judge's Verdict ==\n{verdict}\n\n"
+            f"The user has a follow-up question: {followup}\n\n"
+            f"Respond to this follow-up, informed by the full discussion. "
+            f"Stay in character. 3-5 sentences max."
         )
+    else:
+        base = question
 
-        async def respond(name, cfg):
-            return (name, await call_claude(prompt, cfg["system_prompt"]))
+    return (REPO_PREAMBLE + base) if repo else base
 
-        results = await asyncio.gather(*[respond(n, c) for n, c in _active_agents.items()])
 
-    return dict(results)
+async def run_round_stream(
+    kind: str,
+    question: str,
+    history: list[dict[str, str]],
+    model: str | None = None,
+    followup: str | None = None,
+    verdict: str | None = None,
+    repo: str | None = None,
+    mode: dict | None = None,
+    agent_models: dict[str, str] | None = None,
+):
+    """Async-generator yielding (name, ClaudeResult) as each agent completes.
+
+    Used by the web server to reveal responses one-by-one instead of waiting
+    for the whole round. Raises ClaudeError if any agent's call fails.
+
+    `mode` (the resolved mode dict) makes the call independent of the module
+    globals; `agent_models` optionally assigns a distinct model per agent.
+    """
+    m = mode if mode is not None else _active_mode
+    agents = m["agents"]
+
+    async def one(name, cfg):
+        prompt = _build_agent_prompt(name, question, history, kind, followup, verdict, repo, m)
+        agent_model = (agent_models or {}).get(name) or model
+        res = await call_claude(prompt, cfg["system_prompt"], agent_model, repo=repo)
+        return name, res, agent_model
+
+    coros = [one(n, c) for n, c in agents.items()]
+    for fut in asyncio.as_completed(coros):
+        name, res, agent_model = await fut
+        res.model = agent_model
+        yield name, res
+
+
+async def _collect(
+    kind: str,
+    question: str,
+    history: list[dict[str, str]],
+    model: str | None = None,
+    followup: str | None = None,
+    verdict: str | None = None,
+    repo: str | None = None,
+) -> dict[str, str]:
+    """Run a full round and return {agent: text} (for the CLI/TUI)."""
+    out: dict[str, str] = {}
+    async for name, res in run_round_stream(
+        kind, question, history, model, followup, verdict, repo
+    ):
+        out[name] = res.text
+    return out
+
+
+async def run_round_independent(question: str, model: str | None = None) -> dict[str, str]:
+    """Round 1: each agent answers independently."""
+    return await _collect("independent", question, [], model)
+
+
+async def run_round_middle(
+    question: str, history: list[dict[str, str]], model: str | None = None
+) -> dict[str, str]:
+    """Middle rounds: behavior depends on mode strategy."""
+    return await _collect("middle", question, history, model)
 
 
 async def run_round_commit(
-    question: str, history: list[dict[str, str]]
+    question: str, history: list[dict[str, str]], model: str | None = None
 ) -> dict[str, str]:
     """Final round: behavior depends on mode strategy."""
-    prompt = _get_last_prompt(question, history)
-
-    async def commit(name, cfg):
-        return (name, await call_claude(prompt, cfg["system_prompt"]))
-
-    results = await asyncio.gather(*[commit(n, c) for n, c in _active_agents.items()])
-    return dict(results)
+    return await _collect("commit", question, history, model)
 
 
 # Keep old name as alias for backward compat with TUI
@@ -211,40 +360,165 @@ run_round_attack = run_round_middle
 
 async def run_followup(
     question: str, followup: str, history: list[dict[str, str]], verdict: str,
+    model: str | None = None,
 ) -> dict[str, str]:
     """All agents respond to a follow-up question with full context."""
-    block = build_history_block(history)
-
-    async def respond(name, cfg):
-        prompt = (
-            f"Original question: {question}\n\n"
-            f"{block}\n"
-            f"== Judge's Verdict ==\n{verdict}\n\n"
-            f"The user has a follow-up question: {followup}\n\n"
-            f"Respond to this follow-up, informed by the full discussion. "
-            f"Stay in character. 3-5 sentences max."
-        )
-        return (name, await call_claude(prompt, cfg["system_prompt"]))
-
-    results = await asyncio.gather(*[respond(n, c) for n, c in _active_agents.items()])
-    return dict(results)
+    return await _collect("followup", question, history, model, followup, verdict)
 
 
-async def run_judge(question: str, history: list[dict[str, str]]) -> str:
-    """Final Judge/Reviewer call that reads the full transcript."""
+# Structured-verdict schemas used with `claude --json-schema`. Each mode gets a
+# schema matching what its judge_system_prompt already asks for, so the verdict
+# becomes a mode-specific decision artifact instead of a flat summary.
+_CONFIDENCE = {"type": "string", "enum": ["low", "medium", "high"]}
+_STR_LIST = {"type": "array", "items": {"type": "string"}}
+
+DEFAULT_VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tldr": {"type": "string", "description": "One-sentence bottom line."},
+        "decision": {"type": "string", "description": "The concrete answer or recommendation."},
+        "confidence": _CONFIDENCE,
+        "key_reasons": {**_STR_LIST, "description": "The 3-5 strongest reasons."},
+        "strongest_dissent": {"type": "string", "description": "The best counterargument."},
+        "winning_agent": {"type": "string", "description": "Who made the strongest case (or empty)."},
+    },
+    "required": ["tldr", "decision", "confidence", "key_reasons"],
+}
+
+VERDICT_SCHEMAS: dict[str, dict] = {
+    "debate": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "One-sentence final verdict."},
+            "winning_agent": {"type": "string", "description": "Who made the single strongest argument."},
+            "strongest_argument": {"type": "string", "description": "The strongest argument made."},
+            "unresolved_tension": {"type": "string", "description": "The key tension left unresolved."},
+            "confidence": _CONFIDENCE,
+        },
+        "required": ["tldr", "winning_agent", "strongest_argument"],
+    },
+    "ethics": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "Nuanced one-sentence verdict."},
+            "strongest_argument": {"type": "string"},
+            "winning_agent": {"type": "string"},
+            "core_tension": {"type": "string", "description": "The moral tension no framework resolves."},
+            "additional_context": {"type": "string", "description": "What context would change the answer."},
+            "confidence": _CONFIDENCE,
+        },
+        "required": ["tldr", "core_tension"],
+    },
+    "plan": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "One-sentence plan summary."},
+            "winning_idea": {"type": "string"},
+            "next_steps": {**_STR_LIST, "description": "3-5 concrete, actionable next steps."},
+            "biggest_open_risk": {"type": "string"},
+            "confidence": _CONFIDENCE,
+        },
+        "required": ["tldr", "winning_idea", "next_steps"],
+    },
+    "tech": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "The technically correct answer in one sentence."},
+            "correct_answer": {"type": "string", "description": "The synthesized correct answer."},
+            "confidence": _CONFIDENCE,
+            "incorrect_claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "claim": {"type": "string"},
+                        "correction": {"type": "string"},
+                    },
+                    "required": ["claim", "correction"],
+                },
+                "description": "Claims made during the debate that were wrong, with corrections.",
+            },
+            "caveats": {**_STR_LIST, "description": "Edge cases and caveats."},
+        },
+        "required": ["tldr", "correct_answer", "confidence"],
+    },
+    "startup": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "One-sentence investment take."},
+            "recommendation": {"type": "string", "enum": ["GO", "CONDITIONAL_GO", "NO_GO"]},
+            "strongest_reason": {"type": "string"},
+            "biggest_risk": {"type": "string"},
+            "must_be_true": {**_STR_LIST, "description": "Things that must be true for this to work."},
+            "ninety_day_milestones": {**_STR_LIST, "description": "What you'd want to see in 90 days."},
+            "confidence": _CONFIDENCE,
+        },
+        "required": ["tldr", "recommendation", "strongest_reason"],
+    },
+    "red-team": {
+        "type": "object",
+        "properties": {
+            "tldr": {"type": "string", "description": "One-sentence risk summary."},
+            "risk_posture": {"type": "string", "enum": ["RED", "YELLOW", "GREEN"]},
+            "most_dangerous_flaw": {"type": "string", "description": "The single most dangerous flaw + worst case."},
+            "vulnerabilities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "remediation": {"type": "string"},
+                    },
+                    "required": ["title", "severity"],
+                },
+                "description": "Vulnerabilities ranked by severity.",
+            },
+            "prioritized_fixes": {**_STR_LIST, "description": "Top 3-5 fixes in priority order."},
+        },
+        "required": ["tldr", "risk_posture", "most_dangerous_flaw"],
+    },
+}
+
+
+def _build_judge_prompt(
+    question: str, history: list[dict[str, str]], repo: str | None = None
+) -> str:
     parts = []
     for i, rnd in enumerate(history, 1):
         parts.append(f"== ROUND {i} ==")
         for name, resp in rnd.items():
             parts.append(f"[{name}]: {resp}")
         parts.append("")
-
-    prompt = (
+    base = (
         f"Original question: {question}\n\n"
         f"{''.join(chr(10) + p for p in parts)}\n\n"
         f"Now deliver your judgment."
     )
-    return await call_claude(prompt, _active_judge_prompt)
+    return (REPO_PREAMBLE + base) if repo else base
+
+
+async def run_judge_full(
+    question: str,
+    history: list[dict[str, str]],
+    model: str | None = None,
+    structured: bool = True,
+    repo: str | None = None,
+    mode: dict | None = None,
+) -> ClaudeResult:
+    """Judge the transcript, returning a (mode-specific) structured verdict."""
+    m = mode if mode is not None else _active_mode
+    prompt = _build_judge_prompt(question, history, repo)
+    schema = VERDICT_SCHEMAS.get(m["name"], DEFAULT_VERDICT_SCHEMA) if structured else None
+    return await call_claude(
+        prompt, m["judge_system_prompt"], model, json_schema=schema, repo=repo
+    )
+
+
+async def run_judge(question: str, history: list[dict[str, str]]) -> str:
+    """Final Judge/Reviewer call that reads the full transcript (CLI/TUI)."""
+    res = await run_judge_full(question, history, structured=False)
+    return res.text
 
 
 # ── Display helpers ──────────────────────────────────────────────────────────
@@ -268,9 +542,9 @@ MODE_VERDICT_TITLES = {
 }
 
 
-def get_round_style(round_num: int) -> tuple[str, str]:
+def get_round_style(round_num: int, round_styles: list | None = None) -> tuple[str, str]:
     """Get title and spinner message for a given round number."""
-    styles = _active_round_styles
+    styles = round_styles if round_styles is not None else _active_round_styles
     idx = min(round_num - 1, len(styles) - 1)
     if round_num > len(styles):
         cycle = styles[1:-1] if len(styles) > 2 else styles
@@ -317,12 +591,15 @@ def export_transcript(
     verdict: str,
     output_path: str,
     mode_name: str = None,
+    mode: dict | None = None,
 ):
     """Export the full debate transcript to markdown or JSON."""
     path = Path(output_path)
     ext = path.suffix.lower()
-    mode_name = mode_name or _active_mode["name"]
-    agents = _active_agents
+    m = mode if mode is not None else _active_mode
+    mode_name = mode_name or m["name"]
+    agents = m["agents"]
+    round_styles = m["round_styles"]
 
     if ext == ".json":
         data = {
@@ -353,7 +630,7 @@ def export_transcript(
             f"",
         ]
         for i, rnd in enumerate(history, 1):
-            title, _ = get_round_style(i)
+            title, _ = get_round_style(i, round_styles)
             lines.append(f"---")
             lines.append(f"")
             lines.append(f"## Round {i} — {title}")
@@ -385,16 +662,18 @@ def auto_save_transcript(
     question: str,
     history: list[dict[str, str]],
     verdict: str,
+    mode: dict | None = None,
 ) -> Path:
     """Auto-save transcript to transcripts/ with a timestamped filename."""
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
+    m = mode if mode is not None else _active_mode
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    mode_name = _active_mode["name"]
+    mode_name = m["name"]
     slug = slugify(question)
     md_path = TRANSCRIPT_DIR / f"{stamp}_{mode_name}_{slug}.md"
     json_path = TRANSCRIPT_DIR / f"{stamp}_{mode_name}_{slug}.json"
-    export_transcript(question, history, verdict, str(md_path))
-    export_transcript(question, history, verdict, str(json_path))
+    export_transcript(question, history, verdict, str(md_path), mode=m)
+    export_transcript(question, history, verdict, str(json_path), mode=m)
     return md_path
 
 

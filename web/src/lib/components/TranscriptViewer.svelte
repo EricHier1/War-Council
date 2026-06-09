@@ -5,16 +5,29 @@
 	let {
 		transcript,
 		onClose,
+		onRerun,
 	}: {
-		transcript: { filename: string; content: string };
+		transcript: { filename: string; content: string; question?: string; mode?: string | null };
 		onClose: () => void;
+		onRerun?: (question: string, mode: string | null) => void;
 	} = $props();
 </script>
 
 <div class="transcript-viewer">
 	<div class="transcript-viewer-header">
 		<h2>{transcript.filename}</h2>
-		<button class="btn-secondary btn-sm" onclick={onClose}>Close</button>
+		<div class="transcript-actions">
+			{#if onRerun && transcript.question}
+				<button
+					class="btn-secondary btn-sm"
+					onclick={() => onRerun?.(transcript.question!, transcript.mode ?? null)}
+					title="Run this question again as a new debate"
+				>
+					Re-run
+				</button>
+			{/if}
+			<button class="btn-secondary btn-sm" onclick={onClose}>Close</button>
+		</div>
 	</div>
 	<div class="transcript-content prose">
 		{@html renderMarkdown(transcript.content)}
@@ -34,6 +47,11 @@
 		justify-content: space-between;
 		padding-bottom: 12px;
 		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
+	}
+	.transcript-actions {
+		display: flex;
+		gap: 8px;
 		flex-shrink: 0;
 	}
 	.transcript-viewer-header h2 {
